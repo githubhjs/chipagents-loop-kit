@@ -1,0 +1,9 @@
+{
+  "name": "review-gate",
+  "version": "1.0.0",
+  "description": "Automatic peer review after every agent turn. In ChipAgents a read-only reviewer subagent blocks and forces a rework when it finds real problems; in Claude Code it provides the turn-reviewer agent.",
+  "author": {
+    "name": "Josh_HUANG",
+    "email": "HuangJS@Gmail.com"
+  }
+}

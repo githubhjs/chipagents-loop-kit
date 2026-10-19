@@ -1,0 +1,45 @@
+# ralph-orchestrator config that drives ChipAgents batch mode through the
+# "custom" backend. Copy to the project root as ralph.yml, then:
+#   mkdir -p .ralph-tmp && export TMPDIR=$PWD/.ralph-tmp   # see note below
+#   ralph doctor -c ralph.yml
+#   ralph run -a -c ralph.yml -P PROMPT.md
+#
+# Keys checked against ralph-orchestrator v2.10.1 source. The docs'
+# "custom_command:" key does not exist; the real key is "command".
+#
+# Resulting command line for each iteration:
+#   chipagents batch --name ralph --allow-edits <patterns...> --prompt "<prompt>"
+#
+# Note: Ralph replaces prompts longer than 7000 characters with "read and
+# execute the task in <tmpfile>", written under $TMPDIR. Point TMPDIR inside
+# the project (as above) so ChipAgents can read it.
+
+cli:
+  backend: custom
+  command: chipagents
+  args:
+    - batch
+    - --name
+    - ralph
+    # - --skip-permissions     # ONLY inside an isolated sandbox/container
+    - --allow-edits            # keep last: it takes every following pattern
+    - .chipagents/goal.md
+    - NOTES.md
+    - "rtl/**"
+    - "tb/**"
+    - "sim/**"
+  prompt_mode: arg
+  prompt_flag: "--prompt"
+
+adapters:
+  custom:
+    timeout: 1800              # seconds without output before a run is killed
+
+event_loop:
+  max_iterations: 30
+  max_runtime_seconds: 14400
+  max_consecutive_failures: 5
+  # Ends the loop when the last line of output is exactly this word, or when
+  # the agent runs: ralph emit LOOP_COMPLETE (allowlist "ralph emit:*" in
+  # .chipagents/automatic-commands.toml for that).
+  completion_promise: LOOP_COMPLETE

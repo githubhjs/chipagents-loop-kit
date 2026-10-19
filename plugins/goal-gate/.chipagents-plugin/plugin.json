@@ -1,0 +1,4 @@
+{
+  "name": "goal-gate",
+  "hooks": "./hooks/hooks.toml"
+}

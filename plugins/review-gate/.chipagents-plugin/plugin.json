@@ -1,0 +1,4 @@
+{
+  "name": "review-gate",
+  "hooks": "./hooks/hooks.toml"
+}

@@ -1,0 +1,31 @@
+# chip-ralph settings for ChipAgents batch mode. Copy to the project root
+# as .chip-ralph.conf; chip-ralph.sh sources it with bash.
+#
+# Placeholders replaced for every run: {prompt_file} {output_file}
+# {stats_file} {run}. Keep --allow-edits last: it takes every following
+# word as a pattern until the next --option.
+
+AGENT_ARGV=(
+  chipagents batch
+  --name "chip-ralph-{run}"
+  --prompt-file "{prompt_file}"
+  --output "{output_file}"
+  --stats-file "{stats_file}"
+  # --thinking high
+  # --provider "<alias from /provider>"
+  # --api-key "$CHIPAGENTS_API_KEY"      # CI only; otherwise use the stored login
+  # --skip-permissions                   # ONLY inside an isolated sandbox/container
+  --allow-edits ".chipagents/goal.md" "NOTES.md" "rtl/**" "tb/**" "sim/**" "docs/**"
+)
+
+# Batch mode runs shell commands only from .chipagents/automatic-commands.toml
+# (see automatic-commands.toml.example), unless --skip-permissions is set.
+
+PROMPT_FILE=PROMPT.md
+MAX_LOOPS=30
+LOOP_TIMEOUT=3600           # seconds per ChipAgents run
+MAX_CALLS_PER_HOUR=20
+NO_PROGRESS_LIMIT=3
+SAME_ERROR_LIMIT=3
+FAILURE_LIMIT=3
+TOKEN_BUDGET=0              # stop after this many total tokens (0 = no limit)

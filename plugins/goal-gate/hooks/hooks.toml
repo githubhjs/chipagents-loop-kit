@@ -1,0 +1,14 @@
+# ChipAgents hooks for goal-gate (Claude Code uses hooks.json instead).
+# After every agent turn, check the goal checklist; while it has open
+# "- [ ]" items, ChipAgents reruns the agent with the list of open items.
+
+# Upper bound on reruns per turn. A post_turn_restarts set earlier in the
+# hierarchy (e.g. the project's .chipagents/hooks.toml) takes precedence.
+post_turn_restarts = 20
+
+[[post_turn]]
+type = "bash"
+command = 'bash "${CHIPAGENTS_PLUGIN_ROOT}/hooks/goal-gate.sh"'
+blocking = true
+enable_restarts = true
+timeout = 30

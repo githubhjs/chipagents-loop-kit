@@ -1,0 +1,9 @@
+{
+  "name": "goal-gate",
+  "version": "1.0.0",
+  "description": "Keeps the agent working until every item of the project's goal checklist (.claude/goal.md or .chipagents/goal.md) is done, with a no-progress cutoff.",
+  "author": {
+    "name": "Josh_HUANG",
+    "email": "HuangJS@Gmail.com"
+  }
+}

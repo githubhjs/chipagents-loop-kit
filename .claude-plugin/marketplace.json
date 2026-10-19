@@ -1,0 +1,49 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "loop-kit",
+  "description": "Loop control and autonomous-completion plugins that work in both Claude Code and ChipAgents (--type claude)",
+  "owner": {
+    "name": "Josh_HUANG",
+    "email": "HuangJS@Gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "goal-gate",
+      "description": "Keeps the agent working until every item of the project's goal checklist is done, with a no-progress cutoff.",
+      "author": {
+        "name": "Josh_HUANG",
+        "email": "HuangJS@Gmail.com"
+      },
+      "source": "./plugins/goal-gate",
+      "category": "development"
+    },
+    {
+      "name": "review-gate",
+      "description": "Automatic peer review after every agent turn; in ChipAgents a read-only reviewer subagent forces a rework when it finds real problems.",
+      "author": {
+        "name": "Josh_HUANG",
+        "email": "HuangJS@Gmail.com"
+      },
+      "source": "./plugins/review-gate",
+      "category": "development"
+    },
+    {
+      "name": "nonstop",
+      "description": "Autonomous work mode with pre-flight risk assessment, dangerous-ops approval and a blocker decision framework, enforced by a stop hook.",
+      "author": {
+        "name": "andylizf"
+      },
+      "source": "./plugins/nonstop",
+      "category": "development"
+    },
+    {
+      "name": "superpowers",
+      "description": "Skills library: brainstorming, planning, TDD, systematic debugging, code review and verification before completion. ChipAgents bootstrap rule added.",
+      "author": {
+        "name": "Jesse Vincent"
+      },
+      "source": "./plugins/superpowers",
+      "category": "development"
+    }
+  ]
+}

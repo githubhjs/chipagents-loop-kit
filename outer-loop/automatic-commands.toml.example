@@ -1,0 +1,32 @@
+# Shell commands ChipAgents batch mode may run without asking. Copy to the
+# project's .chipagents/automatic-commands.toml and trim to what the task
+# needs. "x:*" allows every command starting with x; anything else must
+# match exactly. Dangerous patterns stay blocked either way.
+
+commands = [
+  # Read-only inspection
+  "ls:*",
+  "cat:*",
+  "head:*",
+  "tail:*",
+  "grep:*",
+  "find:*",
+  "wc:*",
+  "diff:*",
+
+  # Git: inspect freely; commit only through git-flock (git-flock-kit)
+  "git status:*",
+  "git diff:*",
+  "git log:*",
+  "git show:*",
+  "git flock-commit:*",
+  # "git add:*",            # only if git-flock-kit is not installed
+  # "git commit:*",
+
+  # The project's checks (adjust to your flow)
+  "bash .chipagents/verify.sh",
+  "slang:*",
+  "verilator --lint-only:*",
+  "make lint:*",
+  "make sim:*",
+]

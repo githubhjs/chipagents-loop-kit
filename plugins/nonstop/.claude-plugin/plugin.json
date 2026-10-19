@@ -1,0 +1,10 @@
+{
+  "name": "nonstop",
+  "version": "1.0.0",
+  "description": "Autonomous work mode: pre-flight risk assessment, dangerous-ops approval and a blocker decision framework, enforced by a stop hook. Port of andylizf/nonstop with ChipAgents support.",
+  "author": {
+    "name": "andylizf (ChipAgents port: Josh_HUANG)"
+  },
+  "homepage": "https://github.com/andylizf/nonstop",
+  "license": "MIT"
+}
