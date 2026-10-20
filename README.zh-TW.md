@@ -11,14 +11,14 @@
 | 層級 | 工具 | 什麼時候擋下 agent | 自動煞車條件 |
 |---|---|---|---|
 | **每一輪（turn 內）** | `goal-gate`（新寫） | 目標清單 `goal.md` 還有 `- [ ]` 沒打勾 | 連續 3 輪沒有任何項目完成 |
-| | `review-gate`（新寫） | reviewer subagent 在這一輪的修改裡找到真正的問題 | `post_turn_restarts`（預設 5） |
+| | `review-gate`（新寫） | 唯讀 reviewer（`chipagents batch`）在這一輪的修改裡找到真正的問題 | `post_turn_restarts`；沒設 `REVIEW_GATE=1` 時不啟用 |
 | | `verify-gate`（在 [claude-self-review-kit](https://github.com/githubhjs/claude-self-review-kit) 裡） | `.chipagents/verify.sh` 沒通過（lint／模擬／regression） | 連續 10 次 |
 | **整個 session** | `nonstop`（移植） | 啟動 nonstop 模式後，每次想停就被推回去 | `NONSTOP_MAX`（預設 5 次） |
 | **跨 session（外層迴圈）** | `chip-ralph.sh`（新寫） | 每次重新開一個全新 context 的 ChipAgents 跑，直到清單全勾**而且** verify 通過 | 沒進度、同樣的錯誤、agent 連續失敗、次數上限、每小時上限 |
 | | `ralph-orchestrator`（下載的 binary） | 同上，功能更完整（hats、events） | 迭代次數、時間、連續失敗 |
 | **工作紀律** | `superpowers`（移植） | 以 skill 規範：沒有新鮮證據就不能宣稱完成、TDD、系統化除錯、code review | — |
 
-ChipAgents 的關鍵機制是 **`post_turn` hook 設定 `blocking = true` 加 `enable_restarts = true`**：hook 失敗時，ChipAgents 會帶著 hook 的輸出讓 agent 重跑一次。
+ChipAgents 的關鍵機制是 **`post_turn` bash hook 設定 `blocking = true` 加 `enable_restarts = true`，並且以非 0 結束**：ChipAgents 會帶著 hook 的 stdout 讓 agent 重跑。實測：回傳 `{"block": true}` 並以 0 結束只會擋住、不會重跑；agent 型別的 post_turn hook 則完全不會執行。這些實測結果整理在 [docs/chipagents-hook-mechanics.md](docs/chipagents-hook-mechanics.md)（英文）。
 
 ## 內容
 
@@ -36,6 +36,7 @@ chipagents-loop-kit/
 │   ├── chip-ralph.conf.example          chipagents batch 設定範本
 │   ├── automatic-commands.toml.example  batch mode 允許的指令範本
 │   └── ralph-orchestrator/  v2.10.1 static Linux binary + ralph.yml 範本
+├── docs/chipagents-hook-mechanics.md   ChipAgents hook 行為實測（英文）
 └── vendor/ralph-claude-code-4fd2fe9-src.tar.gz   參考原始碼
 ```
 
@@ -70,11 +71,19 @@ chipagents plugin install superpowers@loop-kit
 從本機 clone 安裝時改用 `chipagents plugin marketplace add /path/to/chipagents-loop-kit --type claude`。
 裝完在 session 裡執行 `/reload`。
 
-**建議在專案的 `.chipagents/hooks.toml` 明確設定重跑上限。** 每個 plugin 都會宣告自己的 `post_turn_restarts`，但 ChipAgents 只採用最先讀到的那個值，而專案目錄比 plugin 先被讀到：
+**請在 workspace 的 `.chipagents/hooks.toml` 設定重跑額度。** 實測：
+- 重跑次數 = `post_turn_restarts` − 1（這個值算的是嘗試次數）。
+- ChipAgents 採用載入時最先找到的值，所以 `~/.chipagents` 或 workspace 裡的值會蓋掉所有 plugin 的值。
+
+要最多重跑 20 次：
 
 ```toml
-post_turn_restarts = 20
+post_turn_restarts = 21
 ```
+
+兩個安裝陷阱（實測）：
+- **安裝時要用和跑 session 相同版本的 ChipAgents。** 如果 `PATH` 上排在前面的是較舊的 `chipagents`（例如 0.20.2，而 session 跑的是 0.42.3），裝出來的 `installed.json` 沒有 `hooks` 欄位，hook 會安靜地完全不執行。
+- **`chipagents plugin install` 對已安裝的 plugin 不會有任何動作。** repo 更新後要執行 `chipagents plugin update <plugin>@loop-kit`。
 
 ### Claude Code
 
@@ -112,21 +121,39 @@ nonstop 和 superpowers 也可以用同樣方式安裝。review-gate 在 Claude 
 
 ## 2. review-gate：每一輪自動 peer review
 
-> 只能在 ChipAgents 用，而且**需要 client-agent mode**，因為 `agent` 型別的 hook 是 client-agent 功能。
+> 只能在 ChipAgents 用。它是一個 **bash** hook，由自己啟動 reviewer，因為實測 agent 型別的 post_turn hook 完全不會執行。
 
-- 每一輪結束後，`review-context.sh` 收集以下內容交給 reviewer：
-  - 目標清單
-  - `git status`
-  - `git diff HEAD`（預設最多 1500 行，可用 `REVIEW_GATE_MAX_DIFF_LINES` 調整）
-- 如果 ChipAgents 有傳入「這個 agent 改了哪些檔」，就**只審這些檔案**，多個 agent 共用 repo 時不會把別人的改動算進來。
-- 接著由一個**唯讀**的 reviewer subagent 檢查：
+在 ChipAgents 執行的環境裡開啟：
+
+```bash
+export REVIEW_GATE=1
+export REVIEW_GATE_PATHS="rtl tb"        # review 範圍：必填
+```
+
+| 變數 | 預設 | 用途 |
+|---|---|---|
+| `REVIEW_GATE` | 關閉 | 設 `1` 開啟（每一輪都會多一次 LLM 呼叫） |
+| `REVIEW_GATE_PATHS` | 無 | 要 review 的路徑，以空白分隔。沒設就拒絕執行 |
+| `REVIEW_GATE_CHIPAGENTS` | `PATH` 上的 `chipagents` | 執行 reviewer 的 binary；請用和 session 相同的版本 |
+| `REVIEW_GATE_THINKING` | `low` | reviewer 的 thinking 等級 |
+| `REVIEW_GATE_TIMEOUT` | `300` | reviewer 執行的秒數上限 |
+| `REVIEW_GATE_MAX_DIFF_LINES` | `1500` | 交給 reviewer 的 diff 行數 |
+| `REVIEW_GATE_KEEP` | 無 | 保存每次的 prompt 和 verdict 的目錄，用來確認某次 BLOCK 是為了什麼 |
+| `REVIEW_GATE_TRACE` | 無 | 每個判斷寫一行紀錄的檔案 |
+
+- **收集範圍**：每一輪結束後，`review-context.sh` 收集目標清單，以及 **`REVIEW_GATE_PATHS` 範圍內**尚未 commit 的修改。
+  - 範圍必須明確宣告，不從 payload 推斷：`post_turn` 的 payload 只有 transcript 文字，沒有修改過的檔案清單。
+  - 審整個工作樹太慢，還會把別的 session 的修改當成這一輪的來審。
+- **唯讀 reviewer**：接著 `review-gate.sh` 用 `chipagents batch` 跑一個**唯讀**的 reviewer，不給 `--allow-edits`，也不給 `--skip-permissions`。
+- **附上原始需求**：prompt 會附上從 transcript 還原的使用者需求，避免把使用者明確要求的內容誤判為 stub。
+- **檢查項目**：
   - RTL bug：reset／clock、latch、位寬截斷、blocking 和 non-blocking 誤用、CDC 沒有同步、FSM 出不去
   - 偷懶：TODO、空模組、把測試改弱
   - **打了勾但沒有證據的項目**
   - 改動和目標矛盾
-- 找到真正的問題就回 `{"block": true, "message": "..."}`，agent 會帶著問題清單重做。風格、命名這類小問題不會擋。
-- 沒有改動（`NO_CHANGES`）時會直接放行，不會呼叫任何工具。
-- **成本**：每一輪都會多一次 LLM review。建議用 `--scope project` 只裝在需要的專案。
+- **判定**：reviewer 必須以 `VERDICT: PASS` 或 `VERDICT: BLOCK` 結尾，以最後一行為準。**BLOCK** 會印出問題清單並以 1 結束，agent 就會重做。風格、命名這類小問題不會擋。
+- **不擋的情況**：範圍內沒有修改時直接放行，不啟動 reviewer。如果 reviewer 不存在、執行失敗或沒有給出 verdict，會印出「The turn was NOT reviewed」並放行。這是品質關卡，不是安全關卡。
+- **防止遞迴**：reviewer 自己的 batch run 也會載入同一組 hook，所以啟動時會帶 `REVIEW_GATE_INNER=1` 和 `CHIPAGENTS_HOOKS_INNER=1`，本套件所有關卡都會跳過這種內部 run。
 - 想手動 review 時，可以直接使用同一套標準的 `turn-reviewer` agent（`agents/turn-reviewer.md`）。
 
 ## 3. nonstop：離開座位前的全自動模式
@@ -255,12 +282,18 @@ ralph run -a -c ralph.yml -P PROMPT.md
 
 ## 注意事項
 
-- **還沒在真正的 ChipAgents 裡跑過。** 所有 hook 都只用模擬的 ChipAgents 輸入測試過。部署後請先執行 `chipagents validate`，並用 claude-self-review-kit 裡的 E2E 測試驗證。
+- **已在真正的 ChipAgents 0.42.3（batch 模式）實測**，由 Josh_HUANG 執行：
+  - review-gate 端到端：一律 BLOCK 的模擬 reviewer 在額度 4 時跑了 4 輪、呼叫 reviewer 4 次。
+  - 真的 reviewer：使用者要求寫 TODO 時放行；同一個檔案在要求寫 DONE 時擋下，並指出 `note.txt:1`。
+  - 遞迴防護：內部 run 記錄了 inner-skip。
+  - goal-gate、nonstop、ralph-loop 依賴的是同一個實測過的機制（stdout + exit 1）。
+  - 互動模式還沒實測。詳見 [docs/chipagents-hook-mechanics.md](docs/chipagents-hook-mechanics.md)。
 - 想看 hook 實際收到什麼，可以暫時加一個 `command = "cat > /tmp/post-turn.json"` 的 `post_turn` hook。
-- **多個關卡會共用 `post_turn_restarts` 這個重跑額度。** 設太小，關卡還沒擋完就沒額度了；設太大，花費會增加。
+- **多個關卡會共用 `post_turn_restarts` 這個重跑額度**，而且重跑次數 = `post_turn_restarts` − 1。設太小，關卡還沒擋完就沒額度了；設太大，花費會增加。
+- **subagent 的回合也會觸發 `post_turn`**（實測），所以 goal-gate、verify-gate 也可能推 subagent 繼續做。關卡會跳過標記為 `CHIPAGENTS_HOOKS_INNER=1` 的 run。
 - **Preserved thinking 模型**（`thinkingRequiresIdenticalPrefix`）：ChipAgents 文件提醒，restart 可能讓之前的 thinking blocks 失效。先小規模試用。
 - hook 用 `$SHELL` 執行。在 tcsh 下也能用，因為指令只是 `bash "<路徑>"`。
-- **ChipAgents 的 shell 工具名稱是 `Bash`**，這是從實際匯出的 ChipAgents 對話紀錄確認的（git commit 都是透過 `Bash(git commit …)` 執行；另外的 `Git` 工具只看到 status、log、diff 這類唯讀操作）。
+- **ChipAgents 的 shell 工具名稱是 `Bash`**（實測：`tool_name` 就是 `"Bash"`；另外的 `Git` 工具只看到 status、log、diff 這類唯讀操作）。
 
 ## 沒有採用的專案
 
@@ -274,7 +307,9 @@ ralph run -a -c ralph.yml -P PROMPT.md
 
 ## 測試狀態
 
-以下都在 Windows Git Bash 用模擬輸入測過：
+真正 ChipAgents 0.42.3 上的實測結果，見「注意事項」第一項。
+
+以下在 Windows Git Bash 用模擬輸入測過：
 
 - **goal-gate**：
   - 沒有 goal 檔
@@ -283,13 +318,15 @@ ralph run -a -c ralph.yml -P PROMPT.md
   - 空轉達上限時放行
   - `[x]`、`[X]`、`[!]` 都算完成
   - Claude 模式（輸出到 stderr）
-- **review-gate**：
-  - 不是 git repo
-  - 空 repo
-  - 沒有改動
-  - 只審 stdin 指定的檔案
-  - 審整個 repo
-  - 過程中修正了 Windows jq 輸出 CRLF 的問題
+  - 跳過內部 run（`CHIPAGENTS_HOOKS_INNER=1`）
+- **review-gate**（bash hook，搭配模擬 reviewer）：
+  - 沒設 `REVIEW_GATE=1` 時不啟用；沒有 `REVIEW_GATE_PATHS` 時拒絕執行
+  - 範圍內沒有修改、或只有範圍外的修改：不啟動 reviewer
+  - PASS 以 0 結束；BLOCK 以 1 結束，印出問題清單且不含 VERDICT 那一行
+  - 以最後一行 VERDICT 為準，前面引用的不算
+  - 沒有 verdict、空輸出、找不到 binary：印出「NOT reviewed」並以 0 結束
+  - reviewer 不會拿到 `--allow-edits` 或 `--skip-permissions`，帶著 inner 旗標執行，prompt 裡有使用者需求和範圍內的 diff
+  - 跳過內部 run
 - **nonstop**：
   - ChipAgents 版：啟動、推回去、自動關閉、手動關閉
   - Claude 原版：session 範圍、`stop_hook_active`

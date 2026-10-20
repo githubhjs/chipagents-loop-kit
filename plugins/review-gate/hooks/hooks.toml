@@ -1,56 +1,23 @@
-# ChipAgents hooks for review-gate. Needs client-agent mode: "agent" hooks
-# are a client-agent feature. Claude Code has no equivalent here; there,
-# use the turn-reviewer agent or pr-review-toolkit by hand.
+# ChipAgents hooks for review-gate (Claude Code uses the turn-reviewer agent
+# instead; there is no Claude hook here).
 #
-# After each agent turn, a read-only reviewer subagent checks the turn's
-# uncommitted changes against the goal checklist. When it finds real
-# problems it blocks, and ChipAgents reruns the agent with the findings.
-
-# Upper bound on review-driven reruns per turn. A post_turn_restarts set
-# earlier in the hierarchy (e.g. the project's .chipagents/hooks.toml) wins.
-post_turn_restarts = 5
+# This is a bash hook, NOT an agent hook, on purpose: an agent-type post_turn
+# hook was measured (ChipAgents 0.42.3, 2026-10-19) to do nothing at all --
+# validate parses it, but it never runs and nothing is rerun. review-gate.sh
+# starts the reviewer itself and exits 1 to block. Off unless REVIEW_GATE=1 and
+# REVIEW_GATE_PATHS are set. See docs/chipagents-hook-mechanics.md.
+#
+# post_turn_restarts below is very likely NOT what you get:
+#   - measured: reruns = post_turn_restarts - 1 (the value counts attempts)
+#   - the first value found while loading wins, so one in ~/.chipagents or in
+#     the workspace beats this plugin's value
+# To get N review rounds, set post_turn_restarts = N + 1 in the WORKSPACE
+# .chipagents/hooks.toml.
+post_turn_restarts = 6
 
 [[post_turn]]
-type = "agent"
-access = "read-only"
-max_turns = 30
-timeout = 300
+type = "bash"
+command = 'bash "${CHIPAGENTS_PLUGIN_ROOT}/hooks/review-gate.sh"'
 blocking = true
 enable_restarts = true
-pass_to_subagents = false
-command = 'bash "${CHIPAGENTS_PLUGIN_ROOT}/hooks/review-context.sh"'
-prompt = '''
-You are a strict, fair peer reviewer for the turn another agent just finished.
-You can read files and run read-only commands. Do not edit anything.
-
-Context collected after the turn:
-
-$COMMAND_OUTPUT
-
-If the context says NO_CHANGES, reply {"block": false} at once without
-using any tools.
-
-Otherwise review only these changes. Block only for problems that are real
-and that matter:
-
-1. Correctness bugs. For RTL/SystemVerilog: wrong reset or clocking, latches,
-   width mismatches or truncation, blocking vs non-blocking misuse, missing
-   default/else branches, clock-domain crossings without synchronizers,
-   off-by-one counters, FSM states that cannot exit. For scripts and
-   software: wrong logic, unhandled errors, swallowed failures.
-2. Incomplete work presented as done: TODO/FIXME stubs, empty modules,
-   commented-out checks, tests weakened or skipped to pass.
-3. Claims without evidence: a checklist item ticked [x] in the goal file
-   whose check was not actually run or does not pass. Re-run cheap, read-only
-   checks yourself when that settles it.
-4. Changes that contradict the goal or acceptance criteria.
-
-Do not block for style, naming, formatting or nitpicks a linter would
-catch, for pre-existing issues on lines this turn did not touch, or for
-anything you could not confirm.
-
-Reply with ONLY one JSON object and nothing else:
-{"block": false}
-or
-{"block": true, "message": "<numbered list: file:line, the problem, the concrete fix>"}
-'''
+timeout = 600

@@ -13,16 +13,19 @@ instead of spinning forever.
 | Layer | Tool | When it holds the agent back | Built-in brake |
 |---|---|---|---|
 | **Every turn** | `goal-gate` (new) | `goal.md` still has an unchecked `- [ ]` item | 3 turns in a row with no item resolved |
-| | `review-gate` (new) | A reviewer subagent finds a real problem in the turn's changes | `post_turn_restarts` (default 5) |
+| | `review-gate` (new) | A read-only reviewer (`chipagents batch`) finds a real problem in the turn's changes | `post_turn_restarts`; off unless `REVIEW_GATE=1` |
 | | `verify-gate` (in [claude-self-review-kit](https://github.com/githubhjs/claude-self-review-kit)) | `.chipagents/verify.sh` fails (lint, simulation, regression) | 10 blocks in a row |
 | **Whole session** | `nonstop` (port) | Once nonstop mode is on, every attempt to stop is pushed back | `NONSTOP_MAX` (default 5) |
 | **Across sessions (outer loop)** | `chip-ralph.sh` (new) | Starts a fresh-context ChipAgents run again and again until the checklist is done **and** verify passes | No progress, same error, agent failures, run limit, hourly limit, token budget |
 | | `ralph-orchestrator` (downloaded binary) | Same idea with more features (hats, events) | Iterations, time, consecutive failures |
 | **Working discipline** | `superpowers` (port) | Skills: no completion claim without fresh evidence, TDD, systematic debugging, code review | — |
 
-The key ChipAgents mechanism is a **`post_turn` hook with `blocking = true`
-and `enable_restarts = true`**: when the hook fails, ChipAgents reruns the
-agent with the hook's output.
+The key ChipAgents mechanism is a **`post_turn` bash hook with
+`blocking = true` and `enable_restarts = true` that exits non-zero**: ChipAgents
+then reruns the agent with the hook's stdout. Returning `{"block": true}` with
+exit 0 blocks without rerunning, and agent-type post_turn hooks do not run at
+all. These and other measured facts are in
+[docs/chipagents-hook-mechanics.md](docs/chipagents-hook-mechanics.md).
 
 ## Contents
 
@@ -40,6 +43,7 @@ chipagents-loop-kit/
 │   ├── chip-ralph.conf.example          chipagents batch settings template
 │   ├── automatic-commands.toml.example  commands batch mode may run
 │   └── ralph-orchestrator/  v2.10.1 static Linux binary + ralph.yml template
+├── docs/chipagents-hook-mechanics.md   measured ChipAgents hook behaviour
 └── vendor/ralph-claude-code-4fd2fe9-src.tar.gz   reference source
 ```
 
@@ -74,13 +78,21 @@ chipagents plugin install superpowers@loop-kit
 From a local clone, use `chipagents plugin marketplace add /path/to/chipagents-loop-kit --type claude`.
 Run `/reload` in a running session afterwards.
 
-**Set the rerun limit explicitly in the project's `.chipagents/hooks.toml`.**
-Each plugin declares its own `post_turn_restarts`, but ChipAgents uses only
-the first value it finds, and the project directory is read before plugins:
+**Set the rerun budget in the workspace `.chipagents/hooks.toml`.** Measured:
+reruns = `post_turn_restarts` − 1, and the first value found while loading wins,
+so a value in `~/.chipagents` or the workspace overrides every plugin's. For up
+to 20 reruns:
 
 ```toml
-post_turn_restarts = 20
+post_turn_restarts = 21
 ```
+
+Two installation pitfalls (measured):
+- Install with the **same ChipAgents version that runs your sessions**. A plugin
+  installed by an older `chipagents` earlier on `PATH` (0.20.2 versus 0.42.3)
+  got no `hooks` entry in `installed.json`, so its hooks silently never ran.
+- `chipagents plugin install` does nothing for an installed plugin. After
+  updating the repository, run `chipagents plugin update <plugin>@loop-kit`.
 
 ### Claude Code
 
@@ -123,29 +135,50 @@ provides the `turn-reviewer` agent; there is no automatic hook.
 
 ## 2. review-gate: automatic peer review every turn
 
-> ChipAgents only, and it **needs client-agent mode**, because `agent`-type
-> hooks are a client-agent feature.
+> ChipAgents only. It is a **bash** hook that starts the reviewer itself,
+> because agent-type post_turn hooks were measured not to run at all.
 
-- After every turn, `review-context.sh` collects for the reviewer:
-  - the goal checklist
-  - `git status`
-  - `git diff HEAD` (up to 1500 lines by default; set
-    `REVIEW_GATE_MAX_DIFF_LINES`)
-- When ChipAgents passes the list of files this agent edited, **only those
-  files are reviewed**, so other agents' changes in a shared repository are
-  not counted.
-- A **read-only** reviewer subagent then checks for:
+Turn it on in the environment ChipAgents runs in:
+
+```bash
+export REVIEW_GATE=1
+export REVIEW_GATE_PATHS="rtl tb"        # review scope: required
+```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REVIEW_GATE` | off | `1` turns the gate on (a reviewer costs an LLM call per turn) |
+| `REVIEW_GATE_PATHS` | none | Space-separated paths to review. Without it the gate refuses to run |
+| `REVIEW_GATE_CHIPAGENTS` | `chipagents` on PATH | The binary that runs the reviewer; use the version that runs your sessions |
+| `REVIEW_GATE_THINKING` | `low` | Reviewer thinking level |
+| `REVIEW_GATE_TIMEOUT` | `300` | Seconds for the reviewer run |
+| `REVIEW_GATE_MAX_DIFF_LINES` | `1500` | Diff lines shown to the reviewer |
+| `REVIEW_GATE_KEEP` | none | Directory that keeps every prompt and verdict, to check what a block was for |
+| `REVIEW_GATE_TRACE` | none | File that gets one line per decision |
+
+- After every turn, `review-context.sh` collects the goal checklist and the
+  uncommitted changes **inside `REVIEW_GATE_PATHS`**. The scope is declared,
+  not inferred: the `post_turn` payload only carries the transcript text, so
+  there is no list of edited files, and a whole-tree review would be slow and
+  would judge other sessions' work.
+- `review-gate.sh` then runs `chipagents batch` as a **read-only** reviewer (no
+  `--allow-edits`, no `--skip-permissions`). The prompt includes the user's
+  request recovered from the transcript, so content the user asked for is not
+  flagged as a stub. The reviewer checks for:
   - RTL bugs: reset/clocking, latches, width truncation, blocking vs
     non-blocking misuse, unsynchronised CDC, FSM states that cannot exit
   - shortcuts: TODOs, empty modules, weakened tests
   - **items ticked without evidence**
   - changes that contradict the goal
-- On a real problem it returns `{"block": true, "message": "..."}` and the
-  agent reworks with the list of issues. Style and naming nitpicks do not
-  block.
-- With no changes (`NO_CHANGES`) it passes at once without using any tools.
-- **Cost**: one extra LLM review per turn. Install it with `--scope project`
-  only where you need it.
+- The reviewer must end with `VERDICT: PASS` or `VERDICT: BLOCK`; the last such
+  line counts. **BLOCK** prints the findings and exits 1, so the agent reworks
+  them. Style and naming nitpicks do not block.
+- No changes in scope: it passes without starting a reviewer. If the reviewer
+  is missing, fails or gives no verdict, it prints "The turn was NOT reviewed"
+  and lets the turn end: it is a quality gate, not a safety gate.
+- The reviewer's own batch run loads the same hooks, so it is started with
+  `REVIEW_GATE_INNER=1` and `CHIPAGENTS_HOOKS_INNER=1`; every gate in this kit
+  skips such inner runs.
 - For a manual review with the same standard, use the `turn-reviewer` agent
   (`agents/turn-reviewer.md`).
 
@@ -321,21 +354,30 @@ ralph run -a -c ralph.yml -P PROMPT.md
 
 ## Notes
 
-- **Not yet run inside real ChipAgents.** Every hook has only been tested with
-  simulated ChipAgents input. After deploying, run `chipagents validate` first
-  and use the E2E test in claude-self-review-kit.
+- **Measured on real ChipAgents 0.42.3 (batch mode)** by Josh_HUANG:
+  review-gate end to end (a mock reviewer that always blocks gave 4 turns and 4
+  reviewer calls with a budget of 4; a real reviewer passed a file whose
+  requested content was TODO, and blocked the same file when DONE had been
+  requested, citing `note.txt:1`) and its recursion guard (the inner run logged
+  inner-skip). goal-gate, nonstop and ralph-loop rely on the same measured
+  mechanism (stdout + exit 1). Interactive mode was not measured; see
+  [docs/chipagents-hook-mechanics.md](docs/chipagents-hook-mechanics.md).
 - To see what a hook actually receives, temporarily add a `post_turn` hook with
   `command = "cat > /tmp/post-turn.json"`.
-- **All gates share the `post_turn_restarts` budget.** Too small and the
-  budget runs out before the gates are satisfied; too large and costs grow.
+- **All gates share the `post_turn_restarts` budget**, and reruns =
+  `post_turn_restarts` − 1. Too small and the budget runs out before the gates
+  are satisfied; too large and costs grow.
+- **Subagent turns trigger `post_turn` too** (measured), so goal-gate and
+  verify-gate can also push a subagent. Gates skip runs marked
+  `CHIPAGENTS_HOOKS_INNER=1`.
 - **Preserved-thinking models** (`thinkingRequiresIdenticalPrefix`): the
   ChipAgents docs warn that restarts can invalidate earlier thinking blocks.
   Try it on a small scale first.
 - Hooks run with `$SHELL`. They work under tcsh too, because each command is
   just `bash "<path>"`.
-- **ChipAgents' shell tool is named `Bash`**, confirmed from exported
-  ChipAgents transcripts (commits run as `Bash(git commit …)`; the separate
-  `Git` tool was only seen doing read-only status, log and diff).
+- **ChipAgents' shell tool is named `Bash`** (measured: `tool_name` is exactly
+  `"Bash"`; the separate `Git` tool was only seen doing read-only status, log and
+  diff).
 
 ## Projects not used
 
@@ -349,7 +391,9 @@ ralph run -a -c ralph.yml -P PROMPT.md
 
 ## Test status
 
-All tested on Windows Git Bash with simulated input:
+On real ChipAgents 0.42.3: see the first item under [Notes](#notes).
+
+Tested on Windows Git Bash with simulated input:
 
 - **goal-gate**:
   - no goal file
@@ -358,13 +402,16 @@ All tested on Windows Git Bash with simulated input:
   - lets the agent stop at the stall limit
   - `[x]`, `[X]` and `[!]` all count as resolved
   - Claude mode (output on stderr)
-- **review-gate**:
-  - not a git repository
-  - empty repository
-  - no changes
-  - only the files listed on stdin
-  - the whole repository
-  - fixed a CRLF problem with jq output on Windows along the way
+  - skips inner runs (`CHIPAGENTS_HOOKS_INNER=1`)
+- **review-gate** (bash hook with a mock reviewer):
+  - off unless `REVIEW_GATE=1`; refuses to run without `REVIEW_GATE_PATHS`
+  - no changes in scope, or changes only outside it: no reviewer started
+  - PASS exits 0; BLOCK exits 1 with the findings and without the VERDICT line
+  - the last VERDICT line wins over a quoted one
+  - no verdict line, empty output or a missing binary: "NOT reviewed", exit 0
+  - the reviewer gets no `--allow-edits` or `--skip-permissions`, runs with the
+    inner flags, and its prompt contains the user's request and the scoped diff
+  - skips inner runs
 - **nonstop**:
   - ChipAgents version: activate, nudge, auto-deactivate, manual deactivate
   - original Claude version: session scope, `stop_hook_active`

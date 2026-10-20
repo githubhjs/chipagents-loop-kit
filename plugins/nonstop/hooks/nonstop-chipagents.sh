@@ -13,6 +13,10 @@ set -uo pipefail
 # Drain the hook input; this hook does not need it.
 cat > /dev/null
 
+# Inner runs (a reviewer started by review-gate, chip-swarm investigators) load
+# the same hooks; they are read-only and must not be pushed to keep working.
+[[ -z "${CHIPAGENTS_HOOKS_INNER:-}" ]] || exit 0
+
 STATE_DIR=".chipagents"
 NONSTOP_MAX="${NONSTOP_MAX:-5}"  # max nudges before auto-deactivation; 0 = unlimited
 active_file="$STATE_DIR/nonstop.active"

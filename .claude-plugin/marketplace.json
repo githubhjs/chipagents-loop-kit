@@ -19,7 +19,7 @@
     },
     {
       "name": "review-gate",
-      "description": "Automatic peer review after every agent turn; in ChipAgents a read-only reviewer subagent forces a rework when it finds real problems.",
+      "description": "Automatic peer review after every agent turn. In ChipAgents a bash post_turn hook runs a read-only reviewer (chipagents batch) over the declared scope and exits 1 with the findings to force a rework (opt-in: REVIEW_GATE=1, REVIEW_GATE_PATHS); in Claude Code it provides the turn-reviewer agent.",
       "author": {
         "name": "Josh_HUANG",
         "email": "HuangJS@Gmail.com"
