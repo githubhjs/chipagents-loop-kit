@@ -80,8 +80,10 @@ on other events (`pre_turn`, `pre_tool_use`) was not tested.
   client-agent mode, which is historical: the switching environment variable
   was removed in v0.25.0.
 - **Subagent turns trigger `post_turn` too**, but do not appear in the run log;
-  they are only visible through side effects. A gate such as goal-gate can
-  therefore push a subagent as well.
+  they are only visible through side effects (an orchestrator that started two
+  subagents left 3 hook records where a plain turn leaves 1). A gate such as
+  goal-gate can therefore push a subagent as well. Whether subagents run
+  concurrently was not measured.
 - **Child batch runs load the same hooks.** A hook that starts
   `chipagents batch` (review-gate) must stop its own recursion; this kit uses
   `REVIEW_GATE_INNER=1` and the shared `CHIPAGENTS_HOOKS_INNER=1`, which every
